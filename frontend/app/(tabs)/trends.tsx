@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, Pressable, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import { colors, radius, spacing, shadow } from '@/src/theme';
 import { apiFetch } from '@/src/api';
 import { todayStr, kgToLbs, lbsToKg } from '@/src/units';
@@ -9,19 +10,22 @@ import Svg, { Polyline, Circle, Line, Text as SText } from 'react-native-svg';
 export default function Trends() {
   const [weights, setWeights] = useState<any[]>([]);
   const [adaptive, setAdaptive] = useState<any>(null);
+  const [recap, setRecap] = useState<any>(null);
   const [wInput, setWInput] = useState('');
   const [unit, setUnit] = useState<'imperial' | 'metric'>('imperial');
 
   const load = async () => {
     try {
-      const [w, a, me] = await Promise.all([
+      const [w, a, me, r] = await Promise.all([
         apiFetch('/logs/weight'),
         apiFetch('/trends/adaptive-tdee'),
         apiFetch('/me'),
+        apiFetch('/trends/weekly-recap'),
       ]);
       setWeights(w.logs);
       setAdaptive(a);
       setUnit(me?.profile?.unit_system || 'imperial');
+      setRecap(r);
     } catch (e: any) { console.warn(e?.message); }
   };
 
@@ -57,6 +61,48 @@ export default function Trends() {
     <SafeAreaView style={styles.safe} edges={['top']}>
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         <Text style={styles.h1}>Trends</Text>
+
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>This week</Text>
+          {recap && recap.logged_days > 0 ? (
+            <>
+              <View style={styles.recapRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.recapBig}>{recap.avg_calories}</Text>
+                  <Text style={styles.sub}>avg kcal/day vs {recap.target_calories} target</Text>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.recapBig, { color: recap.adherence_pct >= 80 ? colors.brand : colors.warning }]}>{recap.adherence_pct}%</Text>
+                  <Text style={styles.sub}>adherence</Text>
+                </View>
+              </View>
+              <View style={styles.miniBars}>
+                {recap.days.map((d: any) => {
+                  const pct = recap.target_calories > 0 ? Math.min(d.calories / recap.target_calories, 1.3) : 0;
+                  const dt = new Date(d.date + 'T00:00:00');
+                  return (
+                    <View key={d.date} style={styles.miniBarCol}>
+                      <View style={styles.miniBarTrack}>
+                        <View style={[styles.miniBarFill, { height: `${Math.min(pct, 1) * 100}%`, backgroundColor: pct > 1 ? colors.warning : colors.brand }]} />
+                      </View>
+                      <Text style={styles.miniBarLbl}>{dt.toLocaleDateString('en-US', { weekday: 'short' })[0]}</Text>
+                    </View>
+                  );
+                })}
+              </View>
+              {recap.top_protein_day && (
+                <View style={styles.recapNoteRow}>
+                  <Ionicons name="trophy-outline" size={14} color={colors.brand} />
+                  <Text style={styles.recapNote}>
+                    Best protein day: {new Date(recap.top_protein_day.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long' })} · {recap.top_protein_day.protein_g}g protein
+                  </Text>
+                </View>
+              )}
+            </>
+          ) : (
+            <Text style={styles.sub}>Log meals this week to see your recap here.</Text>
+          )}
+        </View>
 
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Adaptive TDEE</Text>
@@ -120,4 +166,13 @@ const styles = StyleSheet.create({
   inputRow: { flexDirection: 'row', marginTop: 12, gap: 8 },
   input: { flex: 1, backgroundColor: colors.surfaceTertiary, borderRadius: radius.md, padding: 12, color: colors.onSurface },
   logBtn: { backgroundColor: colors.brand, borderRadius: radius.md, paddingHorizontal: 18, alignItems: 'center', justifyContent: 'center' },
+  recapRow: { flexDirection: 'row', marginTop: 4 },
+  recapBig: { fontSize: 26, fontWeight: '800', color: colors.brand, letterSpacing: -0.5 },
+  miniBars: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 16, height: 60 },
+  miniBarCol: { alignItems: 'center', flex: 1, gap: 6 },
+  miniBarTrack: { width: 14, height: 40, backgroundColor: colors.surfaceTertiary, borderRadius: 7, overflow: 'hidden', justifyContent: 'flex-end' },
+  miniBarFill: { width: '100%', borderRadius: 7 },
+  miniBarLbl: { fontSize: 10, color: colors.muted, fontWeight: '700' },
+  recapNoteRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 14, backgroundColor: colors.brandLight, padding: 10, borderRadius: radius.md },
+  recapNote: { fontSize: 12, color: colors.brandDark, fontWeight: '700', flex: 1 },
 });

@@ -104,6 +104,11 @@ export default function Profile() {
             <Text style={styles.rowLbl}>Workouts</Text>
             <Ionicons name="chevron-forward" size={18} color={colors.muted} />
           </Pressable>
+          <Pressable style={styles.rowP} onPress={() => router.push('/recipes')} testID="recipes-btn">
+            <View style={styles.rowIcon}><Ionicons name="bookmark" size={18} color={colors.brand} /></View>
+            <Text style={styles.rowLbl}>My Recipes</Text>
+            <Ionicons name="chevron-forward" size={18} color={colors.muted} />
+          </Pressable>
           <Pressable style={styles.rowP} onPress={reset} testID="reset-btn">
             <View style={[styles.rowIcon, { backgroundColor: '#fee2e2' }]}><Ionicons name="refresh" size={18} color={colors.error} /></View>
             <Text style={[styles.rowLbl, { color: colors.error }]}>Reset & sign out</Text>

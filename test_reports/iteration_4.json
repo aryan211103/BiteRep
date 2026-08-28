@@ -1,0 +1,40 @@
+{
+  "summary": "Tested all 6 new features end-to-end (backend + frontend mobile web): search placeholder fix, AI photo meal logging with OFF grounding, packaged label scan, barcode scan, recipes save/relog/delete, and weekly recap. 15/15 new backend pytest cases passed (barcode lookup incl. real Nutella/Coca-Cola codes + 404 invalid, saved-foods+search prepend, recipes CRUD+relog, weekly-recap shape, object storage upload/fetch, AI photo-food, AI photo-label). All frontend flows verified via Playwright starting from onboarding: search placeholder exact match, photo-food analyze->grams stepper live recompute->log-all->home totals, label-scan analyze->edit->save+log and save-only->search shows Saved tag first, recipe save->My Recipes->relog (duplicated items+doubled totals confirmed)->delete, barcode/label-scan/photo-food screens render cleanly without crash (camera permission UI), and Trends 'This week' recap card renders above Adaptive TDEE with correct avg/adherence/mini-bars/best-protein-day note.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_new_features.py",
+    "/app/test_reports/pytest/pytest_new_features.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is now 1028 lines - well past the 700-line split threshold flagged in the prior iteration. Recommend extracting AI vision endpoints (ai_photo_food/ai_photo_label), object storage helpers, and recipes/saved-foods routers into separate modules for maintainability.",
+    "Expo web router keeps prior screens mounted in the DOM stack when navigating forward (observed testID duplicates like add-lunch-btn resolving to 2 elements after a deep push/back chain e.g. search->camera-menu->label-scan->back). Not a functional bug (only one is interactable/visible) but worth noting for future test-authoring; used .first or waited for exact single visible screen.",
+    "AI-generated food names from photo-food (e.g. 'milk_chocolate', 'brownie', 'pancake') are lowercase/snake_case in some cases rather than Title Case - minor cosmetic issue on log-item display, not a functional blocker.",
+    "GET /api/files/{path:path} auth uses simple substring check f'/{uid}/' in f'/{path}' - functionally fine for this app's uuid-prefixed paths but slightly fragile string-based auth; acceptable for MVP scope."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (15/15 new + all prior regression suites unaffected)", "frontend": "100% of tested flows passed"},
+  "seed_data_creation": "Created several disposable anon test users via onboarding (TesterBiteRep, TesterRecipe2, TesterDel, TesterBar, TesterPhoto, TesterPhoto2, TesterLabel/2/3, TesterTrends) plus TEST_-prefixed backend pytest fixtures (device_id, food logs, saved foods, recipes) - all anonymous/disposable, no persistent seed data needing cleanup beyond what tests already deleted (food_log, recipe cleanup done in test).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "One transient 502 Bad Gateway was observed mid-run caused by an Expo dev-server restart unrelated to app code (supervisor showed expo uptime reset to ~30s); retried successfully afterward - not an app bug. Test image used for AI vision was a synthetic PIL-drawn shape (per image_testing.md real-feature requirement) - AI correctly detected/grounded 'brownie'/'milk_chocolate'/'pancake' against Open Food Facts on some runs but returned placeholder 'unknown'/0 values on the label-read in one run since the synthetic image had no real nutrition-facts text to OCR; this is a test-data limitation, not a code bug (the endpoint returned 200 with the expected JSON shape every time, and the edit-before-save form correctly let me override values before saving).",
+  "rca_of_issue": null,
+  "verified_fixes": {
+    "feature1_search_placeholder": "PASS - placeholder attribute exactly 'Search foods…'",
+    "feature2_ai_photo_food": "PASS - backend items include matched/source/brand/off_code; frontend shows 'From database'/'AI estimate' badges correctly per matched flag, grams stepper (-10/+10) live-recomputes kcal/P/C/F and ai-total-kcal box (verified 317->478 kcal after +30g), pf-log-all uploads photo then creates food_logs with photo_path and navigates home with correct meal totals",
+    "feature3_label_scan": "PASS - ai/photo-label returns full shape, ls-* fields editable with live per-serving preview, ls-save-log calls saved-foods+logs/food and navigates home, ls-save-only calls only saved-foods and goes back to search; GET /foods/search confirmed saved food appears FIRST with source:'saved' and 'SAVED' UI tag",
+    "feature4_barcode": "PASS - GET /api/foods/barcode/3017620422003 (Nutella) and /5449000000996 (Coca-Cola) both 200 with all required fields; invalid code 000000000000 returns 404; barcode-scan screen renders permission-request UI and CameraView mount cleanly with no crash/red-screen (live scan untestable headlessly as expected)",
+    "feature5_recipes": "PASS - save-recipe-lunch modal -> POST /recipes with correct totals; My Recipes list via GET /recipes; recipe-relog-confirm POSTs /recipes/{id}/relog creating source='recipe' logs, verified lunch total doubled (236->472 kcal) and duplicate item rows appeared; DELETE /recipes/{id} removes it from list",
+    "feature6_weekly_recap": "PASS - GET /trends/weekly-recap returns days[7]/avg_calories/target_calories/adherence_pct/top_protein_day/logged_days; Trends tab renders 'This week' card above 'Adaptive TDEE' with avg kcal vs target, adherence%, 7 mini-bars, and best-protein-day note after logging a banana",
+    "regression": "PASS - /api/me, /api/summary, /api/foods/search (with avoided_foods filtering + saved-foods prepend), /api/logs/food, /api/logs/workout, /api/onboarding all verified working via pytest; /api/buddy/chat not re-tested this run (unchanged code, covered in prior iteration) - noting as not directly re-verified but no code changes touched it"
+  }
+}

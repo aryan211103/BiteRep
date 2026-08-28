@@ -8,11 +8,15 @@ from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
+from starlette.concurrency import run_in_threadpool
 import os
 import re
+import json
 import uuid
+import asyncio
 import logging
 import httpx
+import requests
 import base64
 
 from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent, TextDelta, StreamDone
@@ -32,9 +36,60 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 
 
+# ==================== OBJECT STORAGE (Emergent managed) ====================
+APP_NAME = "biterep"
+STORAGE_BASE = (os.environ.get("INTEGRATION_PROXY_URL") or "").strip() or "https://integrations.emergentagent.com"
+STORAGE_URL = STORAGE_BASE.rstrip("/") + "/objstore/api/v1/storage"
+_storage_key: Optional[str] = None
+
+
+def _init_storage() -> str:
+    global _storage_key
+    if _storage_key:
+        return _storage_key
+    resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_LLM_KEY}, timeout=30)
+    resp.raise_for_status()
+    _storage_key = resp.json()["storage_key"]
+    return _storage_key
+
+
+def _put_object_sync(path: str, data: bytes, content_type: str) -> dict:
+    global _storage_key
+    key = _init_storage()
+    resp = requests.put(f"{STORAGE_URL}/objects/{path}",
+                         headers={"X-Storage-Key": key, "Content-Type": content_type}, data=data, timeout=120)
+    if resp.status_code == 503:
+        _storage_key = None
+        key = _init_storage()
+        resp = requests.put(f"{STORAGE_URL}/objects/{path}",
+                             headers={"X-Storage-Key": key, "Content-Type": content_type}, data=data, timeout=120)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _get_object_sync(path: str) -> tuple:
+    global _storage_key
+    key = _init_storage()
+    resp = requests.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=60)
+    if resp.status_code == 503:
+        _storage_key = None
+        key = _init_storage()
+        resp = requests.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=60)
+    resp.raise_for_status()
+    return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
+
+
 # ==================== HELPERS ====================
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+@app.on_event("startup")
+async def _startup_storage():
+    try:
+        await run_in_threadpool(_init_storage)
+    except Exception as e:
+        logger.warning(f"Object storage init deferred/failed at startup: {e}")
 
 
 # ==================== DIET / CULTURAL PERSONALIZATION ====================
@@ -172,8 +227,9 @@ class FoodLogCreate(BaseModel):
     protein_g: float = 0
     carbs_g: float = 0
     fat_g: float = 0
-    source: str = "manual"  # "openfoodfacts" | "ai" | "manual"
+    source: str = "manual"  # "openfoodfacts" | "ai" | "manual" | "saved" | "recipe"
     off_code: Optional[str] = None
+    photo_path: Optional[str] = None
 
 
 class WeightLogCreate(BaseModel):
@@ -203,6 +259,45 @@ class ChatMessage(BaseModel):
 
 class PhotoFoodRequest(BaseModel):
     image_base64: str
+
+
+class PhotoLabelRequest(BaseModel):
+    image_base64: str
+
+
+class PhotoUploadRequest(BaseModel):
+    image_base64: str
+    content_type: str = "image/jpeg"
+
+
+class SavedFoodCreate(BaseModel):
+    name: str
+    brand: Optional[str] = ""
+    serving_grams: float = 100
+    kcal_100g: float
+    protein_100g: float = 0
+    carbs_100g: float = 0
+    fat_100g: float = 0
+
+
+class RecipeItem(BaseModel):
+    name: str
+    brand: Optional[str] = ""
+    grams: float
+    calories: float
+    protein_g: float = 0
+    carbs_g: float = 0
+    fat_g: float = 0
+
+
+class RecipeCreate(BaseModel):
+    name: str
+    items: List[RecipeItem]
+
+
+class RecipeRelog(BaseModel):
+    date: str
+    meal: str
 
 
 # ==================== AUTH DEPENDENCY ====================
@@ -397,6 +492,27 @@ def _process_hits(hits: List[Dict[str, Any]], query_tokens: List[str], avoided: 
     return candidates, hidden_count
 
 
+async def _ground_item(name: str) -> Optional[Dict[str, Any]]:
+    """Try to ground an AI-detected dish name against real Open Food Facts data."""
+    name = (name or "").strip()
+    if not name:
+        return None
+    tokens = [t for t in re.split(r"\s+", name.lower()) if len(t) > 1]
+    if not tokens:
+        return None
+    hits = await _off_query(name, "united-states", page_size=10)
+    candidates, _ = _process_hits(hits, tokens, [])
+    if not candidates:
+        hits2 = await _off_query(name, None, page_size=10)
+        candidates, _ = _process_hits(hits2, tokens, [])
+    if not candidates:
+        return None
+    best = sorted(candidates, key=lambda c: (c["_relevance"], c["_popularity"]), reverse=True)[0]
+    if best["_relevance"] < 1:
+        return None
+    return best
+
+
 @api_router.get("/foods/search")
 async def food_search(q: str, country: Optional[str] = None, x_user_id: Optional[str] = Header(None)):
     if not q or len(q) < 2:
@@ -410,6 +526,35 @@ async def food_search(q: str, country: Optional[str] = None, x_user_id: Optional
 
     query_tokens = [t for t in re.split(r"\s+", q.lower().strip()) if len(t) > 1]
     bias_country = country or "united-states"
+
+    # Saved foods (from label scans etc.) always show first, per user request.
+    saved_matches: List[Dict[str, Any]] = []
+    if x_user_id:
+        saved = await db.saved_foods.find({"user_id": x_user_id}, {"_id": 0}).to_list(200)
+        qlow = q.lower().strip()
+        for sf in saved:
+            text = f"{sf.get('name','')} {sf.get('brand','')}".lower()
+            if qlow in text or any(t in text for t in query_tokens):
+                grams = sf.get("serving_grams", 100)
+                saved_matches.append({
+                    "code": None,
+                    "name": sf.get("name", ""),
+                    "brand": sf.get("brand", ""),
+                    "serving_label": f"{int(round(grams))} g",
+                    "serving_grams": grams,
+                    "serving_kcal": round(sf.get("kcal_100g", 0) * grams / 100),
+                    "serving_protein": round(sf.get("protein_100g", 0) * grams / 100, 1),
+                    "serving_carbs": round(sf.get("carbs_100g", 0) * grams / 100, 1),
+                    "serving_fat": round(sf.get("fat_100g", 0) * grams / 100, 1),
+                    "kcal_100g": sf.get("kcal_100g", 0),
+                    "protein_100g": sf.get("protein_100g", 0),
+                    "carbs_100g": sf.get("carbs_100g", 0),
+                    "fat_100g": sf.get("fat_100g", 0),
+                    "source": "saved",
+                    "saved_id": sf.get("id"),
+                })
+        if avoided:
+            saved_matches = [m for m in saved_matches if not food_matches_avoided(m["name"], m["brand"], avoided)]
 
     hits = await _off_query(q, bias_country)
     candidates, hidden_count = _process_hits(hits, query_tokens, avoided)
@@ -432,14 +577,139 @@ async def food_search(q: str, country: Optional[str] = None, x_user_id: Optional
             best[key] = c
 
     ranked = sorted(best.values(), key=lambda c: (c["_relevance"], c["_popularity"]), reverse=True)
-    results = []
-    for c in ranked[:20]:
+    results = list(saved_matches)
+    for c in ranked:
+        if len(results) >= 20:
+            break
         c = dict(c)
         c.pop("_relevance", None)
         c.pop("_popularity", None)
+        c["source"] = c.get("source", "openfoodfacts")
         results.append(c)
 
     return {"results": results, "hidden_count": hidden_count}
+
+
+@api_router.get("/foods/barcode/{code}")
+async def food_barcode(code: str):
+    """Look up a single product by barcode via Open Food Facts."""
+    fields = "code,product_name,brands,serving_size,serving_quantity,nutriments,quantity"
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as hc:
+            r = await hc.get(f"https://world.openfoodfacts.org/api/v2/product/{code}.json", params={"fields": fields})
+            r.raise_for_status()
+            data = r.json()
+    except Exception as e:
+        logger.warning(f"barcode lookup failed: {e}")
+        raise HTTPException(502, "Lookup failed")
+    if data.get("status") != 1 or not data.get("product"):
+        raise HTTPException(404, "Product not found for this barcode")
+    hit = dict(data["product"])
+    hit.setdefault("code", code)
+    candidates, _ = _process_hits([hit], [], [])
+    if not candidates:
+        raise HTTPException(404, "No nutrition data available for this product")
+    c = dict(candidates[0])
+    c.pop("_relevance", None)
+    c.pop("_popularity", None)
+    c["source"] = "openfoodfacts"
+    return c
+
+
+# ==================== SAVED FOODS (from label scans) ====================
+@api_router.post("/saved-foods")
+async def create_saved_food(data: SavedFoodCreate, user_id: str = Header(..., alias="X-User-Id")):
+    doc = {"id": str(uuid.uuid4()), "user_id": user_id, "created_at": now_iso(), "use_count": 0, **data.dict()}
+    await db.saved_foods.insert_one(dict(doc))
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.get("/saved-foods")
+async def list_saved_foods(user_id: str = Header(..., alias="X-User-Id")):
+    cursor = db.saved_foods.find({"user_id": user_id}, {"_id": 0}).sort([("use_count", -1), ("created_at", -1)])
+    return {"foods": await cursor.to_list(200)}
+
+
+# ==================== RECIPES ====================
+@api_router.post("/recipes")
+async def create_recipe(data: RecipeCreate, user_id: str = Header(..., alias="X-User-Id")):
+    items = [it.dict() for it in data.items]
+    totals = {
+        "calories": round(sum(i["calories"] for i in items)),
+        "protein_g": round(sum(i["protein_g"] for i in items)),
+        "carbs_g": round(sum(i["carbs_g"] for i in items)),
+        "fat_g": round(sum(i["fat_g"] for i in items)),
+    }
+    doc = {"id": str(uuid.uuid4()), "user_id": user_id, "name": data.name, "items": items, "totals": totals, "created_at": now_iso()}
+    await db.recipes.insert_one(dict(doc))
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.get("/recipes")
+async def list_recipes(user_id: str = Header(..., alias="X-User-Id")):
+    cursor = db.recipes.find({"user_id": user_id}, {"_id": 0}).sort("created_at", -1)
+    return {"recipes": await cursor.to_list(200)}
+
+
+@api_router.delete("/recipes/{recipe_id}")
+async def delete_recipe(recipe_id: str, user_id: str = Header(..., alias="X-User-Id")):
+    r = await db.recipes.delete_one({"id": recipe_id, "user_id": user_id})
+    return {"deleted": r.deleted_count}
+
+
+@api_router.post("/recipes/{recipe_id}/relog")
+async def relog_recipe(recipe_id: str, data: RecipeRelog, user_id: str = Header(..., alias="X-User-Id")):
+    recipe = await db.recipes.find_one({"id": recipe_id, "user_id": user_id}, {"_id": 0})
+    if not recipe:
+        raise HTTPException(404, "Recipe not found")
+    created = []
+    for it in recipe.get("items", []):
+        doc = {
+            "id": str(uuid.uuid4()), "user_id": user_id, "created_at": now_iso(),
+            "date": data.date, "meal": data.meal,
+            "name": it.get("name", ""), "brand": it.get("brand", ""), "grams": it.get("grams", 0),
+            "calories": it.get("calories", 0), "protein_g": it.get("protein_g", 0),
+            "carbs_g": it.get("carbs_g", 0), "fat_g": it.get("fat_g", 0),
+            "source": "recipe", "off_code": None, "photo_path": None,
+        }
+        await db.food_logs.insert_one(dict(doc))
+        doc.pop("_id", None)
+        created.append(doc)
+    return {"logs": created}
+
+
+# ==================== OBJECT STORAGE ENDPOINTS ====================
+@api_router.post("/uploads/photo")
+async def upload_photo(req: PhotoUploadRequest, user_id: str = Header(..., alias="X-User-Id")):
+    b64 = req.image_base64
+    if "," in b64 and b64.startswith("data:"):
+        b64 = b64.split(",", 1)[1]
+    try:
+        data = base64.b64decode(b64)
+    except Exception:
+        raise HTTPException(400, "Invalid image data")
+    ext = "png" if "png" in (req.content_type or "") else "jpg"
+    path = f"{APP_NAME}/uploads/{user_id}/{uuid.uuid4()}.{ext}"
+    try:
+        await run_in_threadpool(_put_object_sync, path, data, req.content_type or "image/jpeg")
+    except Exception as e:
+        logger.exception("photo upload failed")
+        raise HTTPException(502, f"Upload failed: {e}")
+    return {"path": path}
+
+
+@api_router.get("/files/{path:path}")
+async def get_file(path: str, x_user_id: Optional[str] = Header(None), token: Optional[str] = None):
+    uid = x_user_id or token
+    if not uid or f"/{uid}/" not in f"/{path}":
+        raise HTTPException(403, "Forbidden")
+    try:
+        data, content_type = await run_in_threadpool(_get_object_sync, path)
+    except Exception:
+        raise HTTPException(404, "File not found")
+    return StreamingResponse(iter([data]), media_type=content_type)
 
 
 # ==================== FOOD LOGS ====================
@@ -526,6 +796,44 @@ async def adaptive_tdee(user_id: str = Header(..., alias="X-User-Id")):
     }
 
 
+@api_router.get("/trends/weekly-recap")
+async def weekly_recap(user_id: str = Header(..., alias="X-User-Id")):
+    """Rolling 7-day recap: average calories vs target, adherence, and the top-protein day."""
+    user = await db.users.find_one({"id": user_id}, {"_id": 0}) or {}
+    target = (user.get("targets", {}) or {}).get("target_calories", 0)
+    today = datetime.now(timezone.utc).date()
+    days = [(today - timedelta(days=i)).isoformat() for i in range(6, -1, -1)]
+
+    cursor = db.food_logs.find(
+        {"user_id": user_id, "date": {"$in": days}},
+        {"_id": 0, "date": 1, "calories": 1, "protein_g": 1},
+    )
+    logs = await cursor.to_list(5000)
+    by_day: Dict[str, Dict[str, float]] = {d: {"calories": 0.0, "protein_g": 0.0} for d in days}
+    for l in logs:
+        d = l.get("date")
+        if d in by_day:
+            by_day[d]["calories"] += l.get("calories", 0)
+            by_day[d]["protein_g"] += l.get("protein_g", 0)
+
+    logged_days = [d for d in days if by_day[d]["calories"] > 0]
+    avg_calories = round(sum(by_day[d]["calories"] for d in logged_days) / len(logged_days)) if logged_days else 0
+    if target > 0 and logged_days:
+        adherence = round(sum(min(by_day[d]["calories"], target) / target for d in logged_days) / len(logged_days) * 100)
+    else:
+        adherence = 0
+    top_day = max(logged_days, key=lambda d: by_day[d]["protein_g"]) if logged_days else None
+
+    return {
+        "days": [{"date": d, "calories": round(by_day[d]["calories"]), "protein_g": round(by_day[d]["protein_g"])} for d in days],
+        "avg_calories": avg_calories,
+        "target_calories": target,
+        "adherence_pct": adherence,
+        "top_protein_day": {"date": top_day, "protein_g": round(by_day[top_day]["protein_g"])} if top_day and by_day[top_day]["protein_g"] > 0 else None,
+        "logged_days": len(logged_days),
+    }
+
+
 # ==================== AI BUDDY (streaming) ====================
 @api_router.post("/buddy/chat")
 async def buddy_chat(msg: ChatMessage, user_id: str = Header(..., alias="X-User-Id")):
@@ -580,7 +888,7 @@ async def buddy_chat(msg: ChatMessage, user_id: str = Header(..., alias="X-User-
 # ==================== AI PHOTO FOOD ====================
 @api_router.post("/ai/photo-food")
 async def ai_photo_food(req: PhotoFoodRequest, user_id: str = Header(..., alias="X-User-Id")):
-    """Identify dishes from an image and estimate grams + per-100g macros."""
+    """Identify dishes from an image, estimate grams + per-100g macros, and ground against Open Food Facts."""
     try:
         # ensure b64 strips data URI prefix
         b64 = req.image_base64
@@ -608,15 +916,74 @@ async def ai_photo_food(req: PhotoFoodRequest, user_id: str = Header(..., alias=
                 break
 
         # extract JSON
-        import json, re
         m = re.search(r"\{.*\}", text_buf, re.DOTALL)
         if not m:
             raise ValueError("No JSON in response")
         parsed = json.loads(m.group(0))
-        return parsed
+        items = parsed.get("items", [])
+
+        # Ground each detected item against real Open Food Facts data where a confident match exists
+        grounded = await asyncio.gather(*[_ground_item(it.get("name", "")) for it in items], return_exceptions=True)
+        for it, g in zip(items, grounded):
+            if isinstance(g, dict):
+                it["matched"] = True
+                it["source"] = "openfoodfacts"
+                it["brand"] = g.get("brand", "")
+                it["off_code"] = g.get("code")
+                it["kcal_100g"] = g.get("kcal_100g", it.get("kcal_100g", 0))
+                it["protein_100g"] = g.get("protein_100g", it.get("protein_100g", 0))
+                it["carbs_100g"] = g.get("carbs_100g", it.get("carbs_100g", 0))
+                it["fat_100g"] = g.get("fat_100g", it.get("fat_100g", 0))
+            else:
+                it["matched"] = False
+                it["source"] = "ai"
+                it.setdefault("brand", "")
+                it.setdefault("off_code", None)
+
+        return {"items": items}
     except Exception as e:
         logger.exception("photo food failed")
         raise HTTPException(500, f"AI photo food failed: {e}")
+
+
+# ==================== AI PHOTO LABEL (packaged food nutrition panel) ====================
+@api_router.post("/ai/photo-label")
+async def ai_photo_label(req: PhotoLabelRequest, user_id: str = Header(..., alias="X-User-Id")):
+    """Read a Nutrition Facts panel + packaging photo and extract structured per-100g nutrition."""
+    try:
+        b64 = req.image_base64
+        if "," in b64 and b64.startswith("data:"):
+            b64 = b64.split(",", 1)[1]
+
+        chat = LlmChat(
+            api_key=EMERGENT_LLM_KEY,
+            session_id=f"label-{user_id}-{uuid.uuid4()}",
+            system_message=(
+                "You are a nutrition label reading expert. Read the Nutrition Facts panel and product packaging in the image. "
+                "Respond ONLY with valid JSON in this exact format: "
+                "{\"name\":\"...\",\"brand\":\"...\",\"serving_grams\":<num>,\"kcal_100g\":<num>,\"protein_100g\":<num>,\"carbs_100g\":<num>,\"fat_100g\":<num>,\"confidence\":<0-1>}. "
+                "If the label shows per-serving values, convert them to per-100g using the serving size shown. "
+                "If you cannot read a field confidently, make your best estimate rather than omitting it. No markdown, no prose."
+            ),
+        ).with_model("gemini", "gemini-3-flash-preview")
+
+        text_buf = ""
+        async for ev in chat.stream_message(UserMessage(
+            text="Read this nutrition label and the product name/brand. Return JSON only.",
+            file_contents=[ImageContent(image_base64=b64)],
+        )):
+            if isinstance(ev, TextDelta):
+                text_buf += ev.content
+            elif isinstance(ev, StreamDone):
+                break
+
+        m = re.search(r"\{.*\}", text_buf, re.DOTALL)
+        if not m:
+            raise ValueError("No JSON in response")
+        return json.loads(m.group(0))
+    except Exception as e:
+        logger.exception("photo label failed")
+        raise HTTPException(500, f"Label read failed: {e}")
 
 
 # ==================== SUMMARY ====================

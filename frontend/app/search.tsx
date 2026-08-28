@@ -27,6 +27,7 @@ export default function SearchScreen() {
   const [picked, setPicked] = useState<any | null>(null);
   const [meal, setMeal] = useState<MealKey>(initialMeal);
   const [grams, setGrams] = useState('100');
+  const [scanMenuOpen, setScanMenuOpen] = useState(false);
 
   useEffect(() => {
     const h = setTimeout(async () => {
@@ -81,7 +82,7 @@ export default function SearchScreen() {
           protein_g: calc.p,
           carbs_g: calc.c,
           fat_g: calc.f,
-          source: 'openfoodfacts',
+          source: picked.source === 'saved' ? 'saved' : 'openfoodfacts',
           off_code: picked.code,
         }),
       });
@@ -100,13 +101,13 @@ export default function SearchScreen() {
           <TextInput
             value={q}
             onChangeText={setQ}
-            placeholder="Search foods (Open Food Facts)"
+            placeholder="Search foods…"
             style={styles.searchInput}
             autoFocus
             testID="search-input"
           />
         </View>
-        <Pressable onPress={() => router.push('/photo-food')} style={styles.iconBtn} testID="open-camera">
+        <Pressable onPress={() => setScanMenuOpen(true)} style={styles.iconBtn} testID="open-camera">
           <Ionicons name="camera" size={22} color={colors.brand} />
         </Pressable>
       </View>
@@ -128,9 +129,14 @@ export default function SearchScreen() {
           </View>
         }
         renderItem={({ item }) => (
-          <Pressable style={styles.result} onPress={() => pick(item)} testID={`result-${item.code}`}>
+          <Pressable style={styles.result} onPress={() => pick(item)} testID={`result-${item.code || item.name}`}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.resultName} numberOfLines={1}>{item.name}</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <Text style={styles.resultName} numberOfLines={1}>{item.name}</Text>
+                {item.source === 'saved' && (
+                  <View style={styles.savedTag}><Text style={styles.savedTagTxt}>Saved</Text></View>
+                )}
+              </View>
               <Text style={styles.resultSub} numberOfLines={1}>
                 {item.brand ? `${item.brand} · ` : ''}{item.serving_label} · {item.serving_kcal} kcal
               </Text>
@@ -193,7 +199,52 @@ export default function SearchScreen() {
           </View>
         </View>
       </Modal>
+
+      <Modal transparent animationType="fade" visible={scanMenuOpen} onRequestClose={() => setScanMenuOpen(false)}>
+        <Pressable style={styles.menuBackdrop} onPress={() => setScanMenuOpen(false)}>
+          <View style={styles.menuSheet}>
+            <View style={styles.handle} />
+            <Text style={styles.sheetTitle}>Add with camera</Text>
+            <MenuRow
+              icon="camera"
+              title="Snap a meal"
+              sub="AI identifies each dish and estimates macros"
+              testID="scan-menu-meal"
+              onPress={() => { setScanMenuOpen(false); router.push({ pathname: '/photo-food', params: { meal, date } }); }}
+            />
+            <MenuRow
+              icon="receipt-outline"
+              title="Scan a label"
+              sub="Read a Nutrition Facts panel"
+              testID="scan-menu-label"
+              onPress={() => { setScanMenuOpen(false); router.push({ pathname: '/label-scan', params: { meal, date } }); }}
+            />
+            <MenuRow
+              icon="barcode-outline"
+              title="Scan barcode"
+              sub="One-tap add a packaged product"
+              testID="scan-menu-barcode"
+              onPress={() => { setScanMenuOpen(false); router.push({ pathname: '/barcode-scan', params: { meal, date } }); }}
+            />
+          </View>
+        </Pressable>
+      </Modal>
     </SafeAreaView>
+  );
+}
+
+function MenuRow({ icon, title, sub, onPress, testID }: { icon: any; title: string; sub: string; onPress: () => void; testID: string }) {
+  return (
+    <Pressable onPress={onPress} style={styles.menuRow} testID={testID}>
+      <View style={styles.menuIcon}>
+        <Ionicons name={icon} size={20} color={colors.brand} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={styles.menuRowTitle}>{title}</Text>
+        <Text style={styles.menuRowSub}>{sub}</Text>
+      </View>
+      <Ionicons name="chevron-forward" size={18} color={colors.muted} />
+    </Pressable>
   );
 }
 
@@ -233,4 +284,12 @@ const styles = StyleSheet.create({
   previewRow: { flexDirection: 'row', marginTop: 16 },
   cancelBtn: { flex: 1, paddingVertical: 14, borderRadius: radius.lg, backgroundColor: colors.surfaceTertiary, alignItems: 'center' },
   addBtn: { flex: 2, paddingVertical: 14, borderRadius: radius.lg, backgroundColor: colors.brand, alignItems: 'center' },
+  savedTag: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: radius.pill, backgroundColor: colors.brandLight },
+  savedTagTxt: { fontSize: 10, fontWeight: '800', color: colors.brandDark, textTransform: 'uppercase' },
+  menuBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: '#00000055' },
+  menuSheet: { backgroundColor: colors.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: spacing.lg, paddingBottom: 32 },
+  menuRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: colors.border },
+  menuIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.brandLight, alignItems: 'center', justifyContent: 'center' },
+  menuRowTitle: { fontSize: 15, fontWeight: '700', color: colors.onSurface },
+  menuRowSub: { fontSize: 12, color: colors.muted, marginTop: 2 },
 });
