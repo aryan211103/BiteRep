@@ -69,6 +69,24 @@ export default function Profile() {
           </View>
         </View>
 
+        <Text style={styles.section}>Diet & preferences</Text>
+        <View style={styles.card}>
+          <Row icon="earth" label="Background" value={p.faith || 'None'} />
+          <Row icon="leaf" label="Diet type" value={(p.diet_type || 'omnivore').replace('_', ' ')} />
+          {!!(p.protein_sources || []).length && (
+            <View style={{ marginTop: 10 }}>
+              <Text style={styles.proteinLbl}>Your protein sources</Text>
+              <View style={styles.proteinWrap}>
+                {(p.protein_sources || []).map((s: string) => (
+                  <View key={s} style={styles.proteinChip}>
+                    <Text style={styles.proteinChipTxt}>{s}</Text>
+                  </View>
+                ))}
+              </View>
+            </View>
+          )}
+        </View>
+
         <Text style={styles.section}>Settings</Text>
         <View style={styles.card}>
           <Pressable style={styles.rowP} onPress={toggleUnit} testID="toggle-unit-btn">
@@ -119,4 +137,8 @@ const styles = StyleSheet.create({
   rowVal: { color: colors.muted, fontWeight: '700', fontSize: 14, textTransform: 'capitalize' },
   input: { flex: 1, backgroundColor: colors.surfaceTertiary, borderRadius: radius.md, padding: 12, color: colors.onSurface },
   saveBtn: { backgroundColor: colors.brand, borderRadius: radius.md, paddingHorizontal: 20, alignItems: 'center', justifyContent: 'center' },
+  proteinLbl: { fontSize: 12, color: colors.muted, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 },
+  proteinWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  proteinChip: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: radius.pill, backgroundColor: colors.brandLight },
+  proteinChipTxt: { color: colors.brandDark, fontWeight: '700', fontSize: 12 },
 });

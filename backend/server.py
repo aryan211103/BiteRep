@@ -9,6 +9,7 @@ from typing import List, Optional, Dict, Any
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 import os
+import re
 import uuid
 import logging
 import httpx
@@ -34,6 +35,62 @@ logger = logging.getLogger(__name__)
 # ==================== HELPERS ====================
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+# ==================== DIET / CULTURAL PERSONALIZATION ====================
+DIET_ITEMS = ["beef", "pork", "chicken", "mutton", "seafood", "eggs", "dairy", "root_veg", "onion_garlic"]
+
+# Keywords (word-boundary matched) used to detect a food item as containing an avoided ingredient.
+FOOD_KEYWORDS: Dict[str, List[str]] = {
+    "beef": ["beef", "steak", "veal", "brisket"],
+    "pork": ["pork", "bacon", "ham", "prosciutto", "pepperoni", "salami", "lard", "sausage", "chorizo"],
+    "chicken": ["chicken", "poultry"],
+    "mutton": ["mutton", "lamb", "goat"],
+    "seafood": ["fish", "seafood", "shrimp", "shrimps", "prawn", "prawns", "salmon", "tuna", "crab",
+                "lobster", "squid", "octopus", "anchovy", "anchovies", "sardine", "sardines", "cod",
+                "tilapia", "shellfish"],
+    "eggs": ["egg", "eggs"],
+    "dairy": ["milk", "cheese", "yogurt", "yoghurt", "butter", "cream", "paneer", "ghee", "curd", "dairy"],
+    "root_veg": ["potato", "potatoes", "carrot", "carrots", "beet", "beets", "radish", "turnip", "yam", "sweet potato"],
+    "onion_garlic": ["onion", "onions", "garlic"],
+}
+
+# Labels used to build a personalized "your protein sources" list.
+PROTEIN_LABELS: Dict[str, str] = {
+    "chicken": "Chicken",
+    "mutton": "Mutton & lamb",
+    "seafood": "Fish & seafood",
+    "beef": "Beef",
+    "pork": "Pork",
+    "eggs": "Eggs",
+    "dairy": "Paneer & dairy",
+}
+PLANT_PROTEINS = ["Lentils (dal)", "Chickpeas", "Beans", "Tofu", "Soy", "Peanuts"]
+
+
+def compute_avoided_foods(diet_flags: Dict[str, bool]) -> List[str]:
+    """Return the list of food keys the user has toggled OFF."""
+    return [k for k in DIET_ITEMS if diet_flags.get(k) is False]
+
+
+def compute_protein_sources(diet_flags: Dict[str, bool]) -> List[str]:
+    """Build a warm, personalized list of protein sources the user actually eats."""
+    sources: List[str] = []
+    for key in ["chicken", "mutton", "seafood", "eggs", "dairy", "beef", "pork"]:
+        if diet_flags.get(key, True):
+            sources.append(PROTEIN_LABELS[key])
+    sources.extend(PLANT_PROTEINS)
+    return sources
+
+
+def food_matches_avoided(name: str, brand: str, avoided: List[str]) -> bool:
+    """Word-boundary keyword match to detect if a food item contains an avoided ingredient."""
+    text = f"{name} {brand}".lower()
+    for a in avoided:
+        for kw in FOOD_KEYWORDS.get(a, []):
+            if re.search(rf"\b{re.escape(kw)}\b", text):
+                return True
+    return False
 
 
 def compute_targets(profile: Dict[str, Any]) -> Dict[str, Any]:
@@ -94,6 +151,7 @@ class OnboardingData(BaseModel):
     rate_pct: Optional[float] = None
     unit_system: str = "imperial"  # or "metric"
     faith: Optional[str] = "none"
+    diet_type: Optional[str] = "omnivore"  # omnivore|eggetarian|vegetarian|vegan|pescatarian
     diet_flags: Dict[str, bool] = Field(default_factory=dict)  # e.g. {"beef": False, "pork": False}
 
 
@@ -187,16 +245,19 @@ async def me(user_id: str = None, x_user_id: Optional[str] = Header(None)):
 @api_router.post("/onboarding")
 async def onboarding(data: OnboardingData, user_id: str = Header(..., alias="X-User-Id")):
     targets = compute_targets(data.dict())
+    profile = data.dict()
+    profile["avoided_foods"] = compute_avoided_foods(profile.get("diet_flags", {}))
+    profile["protein_sources"] = compute_protein_sources(profile.get("diet_flags", {}))
     await db.users.update_one(
         {"id": user_id},
         {"$set": {
             "onboarded": True,
-            "profile": data.dict(),
+            "profile": profile,
             "targets": targets,
             "updated_at": now_iso(),
         }},
     )
-    return {"targets": targets, "profile": data.dict()}
+    return {"targets": targets, "profile": profile}
 
 
 @api_router.patch("/profile")
@@ -205,6 +266,9 @@ async def update_profile(payload: Dict[str, Any], user_id: str = Header(..., ali
     if not user:
         raise HTTPException(404)
     profile = {**user.get("profile", {}), **payload.get("profile", {})}
+    if "diet_flags" in (payload.get("profile") or {}):
+        profile["avoided_foods"] = compute_avoided_foods(profile.get("diet_flags", {}))
+        profile["protein_sources"] = compute_protein_sources(profile.get("diet_flags", {}))
     targets_override = payload.get("targets") or {}
     computed = compute_targets(profile)
     final_targets = {**computed, **{k: v for k, v in targets_override.items() if v is not None}}
@@ -214,10 +278,17 @@ async def update_profile(payload: Dict[str, Any], user_id: str = Header(..., ali
 
 # ==================== FOOD SEARCH (Open Food Facts) ====================
 @api_router.get("/foods/search")
-async def food_search(q: str, country: Optional[str] = None):
+async def food_search(q: str, country: Optional[str] = None, x_user_id: Optional[str] = Header(None)):
     if not q or len(q) < 2:
         return {"results": []}
-    params: Dict[str, Any] = {"q": q, "page_size": 30, "fields": "code,product_name,brands,serving_size,serving_quantity,nutriments,quantity,countries_tags"}
+
+    avoided: List[str] = []
+    if x_user_id:
+        user = await db.users.find_one({"id": x_user_id}, {"_id": 0, "profile": 1})
+        if user:
+            avoided = user.get("profile", {}).get("avoided_foods", []) or []
+
+    params: Dict[str, Any] = {"q": q, "page_size": 40, "fields": "code,product_name,brands,serving_size,serving_quantity,nutriments,quantity,countries_tags"}
     if country:
         params["countries_tags"] = f"en:{country.lower()}"
     try:
@@ -231,6 +302,7 @@ async def food_search(q: str, country: Optional[str] = None):
 
     seen_keys = set()
     results = []
+    hidden_count = 0
     for hit in data.get("hits", []) or data.get("products", []):
         pn = hit.get("product_name") or ""
         if isinstance(pn, list):
@@ -255,6 +327,9 @@ async def food_search(q: str, country: Optional[str] = None):
         key = f"{name.lower()}|{brand.lower()}"
         if key in seen_keys:
             continue
+        if avoided and food_matches_avoided(name, brand, avoided):
+            hidden_count += 1
+            continue
         seen_keys.add(key)
         prot = nutr.get("proteins_100g") or 0
         carbs = nutr.get("carbohydrates_100g") or 0
@@ -272,7 +347,7 @@ async def food_search(q: str, country: Optional[str] = None):
         })
         if len(results) >= 20:
             break
-    return {"results": results}
+    return {"results": results, "hidden_count": hidden_count}
 
 
 # ==================== FOOD LOGS ====================
@@ -373,11 +448,14 @@ async def buddy_chat(msg: ChatMessage, user_id: str = Header(..., alias="X-User-
     eaten_f = sum(l.get("fat_g", 0) for l in logs)
     diet_flags = profile.get("diet_flags", {})
     excluded = [k for k, v in diet_flags.items() if v is False]
+    protein_sources = profile.get("protein_sources") or compute_protein_sources(diet_flags)
 
     system = (
         f"You are Buddy, a friendly, concise BiteRep AI food coach. "
         f"User: {profile.get('name','friend')}, goal={profile.get('goal','maintain')}, "
-        f"faith={profile.get('faith','none')}. Excluded foods: {', '.join(excluded) if excluded else 'none'}. "
+        f"faith={profile.get('faith','none')}, diet_type={profile.get('diet_type','omnivore')}. "
+        f"Excluded foods: {', '.join(excluded) if excluded else 'none'}. "
+        f"Their usual protein sources: {', '.join(protein_sources)}. Prefer suggesting from this list. "
         f"Daily targets: {targets.get('target_calories',0)} kcal, "
         f"{targets.get('protein_g',0)}g protein, {targets.get('carbs_g',0)}g carbs, {targets.get('fat_g',0)}g fat. "
         f"Eaten today: {round(eaten_kcal)} kcal, {round(eaten_p)}g P / {round(eaten_c)}g C / {round(eaten_f)}g F. "

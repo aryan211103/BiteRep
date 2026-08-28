@@ -1,0 +1,32 @@
+{
+  "summary": "Tested the new Dietary & Religious Personalization feature (backend + frontend, mobile viewport 375x667) added on top of the previously-passing MVP. Backend: 9/9 new pytest cases passed covering onboarding diet_flags computation, avoided_foods/protein_sources persistence, PATCH /api/profile recompute, and foods/search word-boundary filtering (beef-restricted user correctly excludes 'beef' items, unrestricted 'rice' search unaffected). Frontend: full onboarding wizard walked end-to-end multiple times via real app flow (starting at '/' so anon-auth bootstrap runs correctly) covering Hindu (beef OFF only), Muslim (pork OFF only), Sikh, Jain (auto-switches diet_type to Vegetarian + turns off 8 flags, dairy stays ON), diet_type Pescatarian (beef/pork/chicken/mutton OFF, seafood/eggs/dairy ON) and Vegan (all animal off except plant proteins) -- all matched spec exactly in both the diet_detail toggle UI and the summary 'Your protein sources' chip list. Manual toggle override (re-enabling beef after Hindu default) worked and correctly flowed through submit payload. POST /api/onboarding submit returns 200 with correct diet_type + diet_flags payload and redirects to /home. Profile tab 'Diet & preferences' card correctly renders Background/Diet type/protein-source chips post-onboarding.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "global", "issue": "Console warning: 'shadow*' style props deprecated (use boxShadow) -- pre-existing, non-blocking, noted in prior iteration too"},
+      {"component": "global", "issue": "Console warning: props.pointerEvents deprecated -- pre-existing, non-blocking"}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_diet_personalization.py",
+    "/app/test_reports/pytest/pytest_diet_results.xml"
+  ],
+  "action_items": [
+    "None blocking. Optional: fix pre-existing deprecated style prop warnings (shadow*, pointerEvents) noted previously."
+  ],
+  "critical_code_review_comments": [
+    "server.py compute_avoided_foods/compute_protein_sources correctly mirror frontend onboarding.tsx logic (dietDefaultsForType/applyFaithOverrides/proteinSources) -- no drift observed between client seeding and server-side recomputation.",
+    "OnboardingData.diet_flags defaults to {} via Field(default_factory=dict); if a client omits diet_flags entirely, avoided_foods will be empty and protein_sources will include everything (verified in test_missing_diet_flags_defaults_empty) -- acceptable fallback behavior (treats missing flags as 'True').",
+    "food_matches_avoided uses word-boundary regex correctly, preventing false positives (e.g., 'beef' won't match unrelated substrings) -- verified against live OFF search results.",
+    "PATCH /api/profile merges profile dict shallowly (spread) -- fine for flat diet_flags dict, but if diet_flags is a nested dict passed partially (not all 9 keys), the merge REPLACES the whole diet_flags key rather than deep-merging per-key; frontend always sends full 9-key dict so not currently an issue, but worth noting for future partial-update use cases."
+  ],
+  "updated_files": ["/app/backend/tests/test_diet_personalization.py"],
+  "success_rate": {"backend": "100% (9/9 new diet-personalization tests)", "frontend": "100% (faith x3, diet_type x2 (pescatarian, vegan), Jain cascading override, manual toggle override, full submit + redirect, profile tab diet card all verified)"},
+  "seed_data_creation": "Ephemeral TEST_diet_* device_ids created per pytest test function; not cleaned up but namespaced/isolated per anonymous user, no impact on production data.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "IMPORTANT gotcha for future testers: navigating Playwright directly to http://localhost:3000/onboarding (skipping '/') skips the app's authAnon() bootstrap in index.tsx, so apiFetch has no X-User-Id in AsyncStorage and POST /api/onboarding will 422 with 'Missing X-User-Id header' -- this is a TEST ARTIFACT, not an app bug. Always start Playwright navigation at '/' (root) to let the app auto-create the anon user before walking onboarding. Also note profile.tsx section titles use textTransform:'uppercase' CSS, so page.inner_text() checks against exact-case strings like 'Diet & preferences' will fail; use case-insensitive checks or check for 'DIET & PREFERENCES'. All diet-personalization rules from the spec (Hindu/Muslim/Sikh/Jewish/Buddhist/Jain faith seeding, all 5 diet_type seeding, manual toggle overrides, protein-source chip computation, avoided_foods filtering in food search) verified working correctly both client-side (onboarding.tsx) and server-side (server.py) with matching logic."
+}

@@ -7,7 +7,7 @@ import { colors, radius, spacing, shadow } from '@/src/theme';
 import { apiFetch } from '@/src/api';
 import { inToCm, cmToIn, lbsToKg, kgToLbs } from '@/src/units';
 
-const STEPS = ['welcome', 'name', 'sex', 'age', 'measurements', 'activity', 'goal', 'diet', 'summary'] as const;
+const STEPS = ['welcome', 'name', 'sex', 'age', 'measurements', 'activity', 'goal', 'faith', 'diet_type', 'diet_detail', 'summary'] as const;
 type Step = typeof STEPS[number];
 
 const ACTIVITIES: { key: string; label: string; sub: string }[] = [
@@ -24,17 +24,73 @@ const GOALS: { key: string; label: string; sub: string }[] = [
   { key: 'build_muscle', label: 'Build muscle', sub: 'Slight surplus' },
 ];
 
-const FAITHS = ['None', 'Hindu', 'Muslim', 'Jain', 'Christian', 'Jewish', 'Buddhist', 'Other'];
-const DIET_ITEMS = ['beef', 'pork', 'chicken', 'mutton', 'seafood', 'eggs', 'dairy', 'onion_garlic', 'root_veg'];
+const FAITHS = ['None', 'Hindu', 'Muslim', 'Jain', 'Christian', 'Jewish', 'Buddhist', 'Sikh'];
 
-const defaultDietForFaith = (f: string) => {
+const DIET_TYPES: { key: string; label: string; sub: string }[] = [
+  { key: 'omnivore', label: 'Omnivore', sub: 'Eats everything' },
+  { key: 'eggetarian', label: 'Eggetarian', sub: 'Vegetarian + eggs' },
+  { key: 'vegetarian', label: 'Vegetarian', sub: 'No meat, fish or eggs' },
+  { key: 'vegan', label: 'Vegan', sub: 'No animal products at all' },
+  { key: 'pescatarian', label: 'Pescatarian', sub: 'Vegetarian + fish & seafood' },
+];
+
+const DIET_ITEMS = ['beef', 'pork', 'chicken', 'mutton', 'seafood', 'eggs', 'dairy', 'root_veg', 'onion_garlic'];
+const DIET_LABELS: Record<string, string> = {
+  beef: 'Beef',
+  pork: 'Pork',
+  chicken: 'Chicken',
+  mutton: 'Mutton & lamb',
+  seafood: 'Fish & seafood',
+  eggs: 'Eggs',
+  dairy: 'Dairy',
+  root_veg: 'Root vegetables',
+  onion_garlic: 'Onion & garlic',
+};
+
+// Base defaults by diet type — these only SEED sensible starting toggles; the user can flip anything.
+const dietDefaultsForType = (t: string): Record<string, boolean> => {
   const d: Record<string, boolean> = Object.fromEntries(DIET_ITEMS.map((k) => [k, true]));
-  if (f === 'Hindu') d.beef = false;
-  if (f === 'Muslim') d.pork = false;
-  if (f === 'Jain') { d.beef = d.pork = d.chicken = d.mutton = d.seafood = d.eggs = d.onion_garlic = d.root_veg = false; }
-  if (f === 'Jewish') d.pork = false;
-  if (f === 'Buddhist') { d.beef = d.pork = d.chicken = d.mutton = d.seafood = false; }
+  if (t === 'vegetarian' || t === 'vegan') {
+    d.beef = d.pork = d.chicken = d.mutton = d.seafood = d.eggs = false;
+    if (t === 'vegan') d.dairy = false;
+  } else if (t === 'eggetarian') {
+    d.beef = d.pork = d.chicken = d.mutton = d.seafood = false;
+    d.eggs = true;
+  } else if (t === 'pescatarian') {
+    d.beef = d.pork = d.chicken = d.mutton = false;
+    d.seafood = true; d.eggs = true; d.dairy = true;
+  }
   return d;
+};
+
+// Faith seeds additional sensible defaults on top of the diet-type baseline.
+const applyFaithOverrides = (faith: string, d: Record<string, boolean>): Record<string, boolean> => {
+  const out = { ...d };
+  if (faith === 'Hindu') out.beef = false;
+  if (faith === 'Muslim') out.pork = false;
+  if (faith === 'Jewish') out.pork = false;
+  if (faith === 'Sikh') out.beef = false;
+  if (faith === 'Buddhist') { out.beef = out.pork = out.chicken = out.mutton = out.seafood = false; }
+  if (faith === 'Jain') {
+    out.beef = out.pork = out.chicken = out.mutton = out.seafood = out.eggs = false;
+    out.root_veg = false; out.onion_garlic = false;
+  }
+  return out;
+};
+
+const computeDietDefaults = (faith: string, dietType: string) => applyFaithOverrides(faith, dietDefaultsForType(dietType));
+
+const PROTEIN_LABELS: Record<string, string> = {
+  chicken: 'Chicken', mutton: 'Mutton & lamb', seafood: 'Fish & seafood',
+  beef: 'Beef', pork: 'Pork', eggs: 'Eggs', dairy: 'Paneer & dairy',
+};
+const PLANT_PROTEINS = ['Lentils (dal)', 'Chickpeas', 'Beans', 'Tofu', 'Soy', 'Peanuts'];
+const proteinSources = (d: Record<string, boolean>): string[] => {
+  const list: string[] = [];
+  (['chicken', 'mutton', 'seafood', 'eggs', 'dairy', 'beef', 'pork'] as const).forEach((k) => {
+    if (d[k]) list.push(PROTEIN_LABELS[k]);
+  });
+  return [...list, ...PLANT_PROTEINS];
 };
 
 export default function Onboarding() {
@@ -52,7 +108,8 @@ export default function Onboarding() {
   const [activity, setActivity] = useState('moderate');
   const [goal, setGoal] = useState('maintain');
   const [faith, setFaith] = useState('None');
-  const [diet, setDiet] = useState<Record<string, boolean>>(defaultDietForFaith('None'));
+  const [dietType, setDietType] = useState('omnivore');
+  const [diet, setDiet] = useState<Record<string, boolean>>(computeDietDefaults('None', 'omnivore'));
   const [busy, setBusy] = useState(false);
 
   const idx = STEPS.indexOf(step);
@@ -93,6 +150,7 @@ export default function Onboarding() {
           goal,
           unit_system: unit,
           faith,
+          diet_type: dietType,
           diet_flags: diet,
         }),
       });
@@ -216,23 +274,51 @@ export default function Onboarding() {
               ))}
             </View>
           )}
-          {step === 'diet' && (
+          {step === 'faith' && (
             <View>
-              <Text style={styles.h1}>Dietary preferences</Text>
-              <Text style={styles.p}>Pick your faith to seed defaults, then adjust. We'll respect these in food search and coaching.</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingVertical: 8 }}>
+              <Text style={styles.h1}>Your background</Text>
+              <Text style={styles.p}>This just helps us seed sensible defaults for what you eat — you can change anything after.</Text>
+              <View style={styles.cardGrid}>
                 {FAITHS.map((f) => (
                   <Pressable
                     key={f}
-                    onPress={() => { setFaith(f); setDiet(defaultDietForFaith(f)); }}
-                    style={[styles.chip, faith === f && styles.chipSel]}
+                    onPress={() => {
+                      setFaith(f);
+                      const dt = f === 'Jain' ? 'vegetarian' : dietType;
+                      if (f === 'Jain') setDietType(dt);
+                      setDiet(computeDietDefaults(f, dt));
+                    }}
+                    style={[styles.gridCard, faith === f && styles.gridCardSel]}
                     testID={`onb-faith-${f}`}
                   >
-                    <Text style={[styles.chipTxt, faith === f && styles.chipTxtSel]}>{f}</Text>
+                    <Text style={[styles.gridCardTxt, faith === f && { color: '#fff' }]}>{f}</Text>
                   </Pressable>
                 ))}
-              </ScrollView>
-              <View style={{ marginTop: spacing.md, gap: 8 }}>
+              </View>
+            </View>
+          )}
+          {step === 'diet_type' && (
+            <View>
+              <Text style={styles.h1}>How do you eat?</Text>
+              <Text style={styles.p}>Pick the closest match, then fine-tune the details next.</Text>
+              {DIET_TYPES.map((d) => (
+                <Pressable
+                  key={d.key}
+                  onPress={() => { setDietType(d.key); setDiet(computeDietDefaults(faith, d.key)); }}
+                  style={[styles.optionCard, dietType === d.key && styles.optionCardSel]}
+                  testID={`onb-diettype-${d.key}`}
+                >
+                  <Text style={[styles.optTitle, dietType === d.key && { color: '#fff' }]}>{d.label}</Text>
+                  <Text style={[styles.optSub, dietType === d.key && { color: '#dcfce7' }]}>{d.sub}</Text>
+                </Pressable>
+              ))}
+            </View>
+          )}
+          {step === 'diet_detail' && (
+            <View>
+              <Text style={styles.h1}>What do you actually eat?</Text>
+              <Text style={styles.p}>We seeded these from your picks, but toggle anything on or off — this is about fitting BiteRep to how you already eat, not judging it.</Text>
+              <View style={{ gap: 8 }}>
                 {DIET_ITEMS.map((k) => (
                   <Pressable
                     key={k}
@@ -240,7 +326,7 @@ export default function Onboarding() {
                     style={styles.dietRow}
                     testID={`onb-diet-${k}`}
                   >
-                    <Text style={styles.dietLbl}>{k.replace('_', ' ')}</Text>
+                    <Text style={styles.dietLbl}>{DIET_LABELS[k]}</Text>
                     <View style={[styles.toggle, diet[k] && styles.toggleOn]}>
                       <View style={[styles.toggleKnob, diet[k] && { left: 20 }]} />
                     </View>
@@ -268,6 +354,16 @@ export default function Onboarding() {
                 </View>
               </View>
               <Text style={styles.finePrint}>You can override this target anytime in Profile.</Text>
+
+              <Text style={styles.proteinHeading}>Your protein sources</Text>
+              <Text style={styles.p}>Based on what you eat — swap anything anytime in Profile.</Text>
+              <View style={styles.proteinWrap}>
+                {proteinSources(diet).map((s) => (
+                  <View key={s} style={styles.proteinChip}>
+                    <Text style={styles.proteinChipTxt}>{s}</Text>
+                  </View>
+                ))}
+              </View>
             </View>
           )}
         </ScrollView>
@@ -333,6 +429,14 @@ const styles = StyleSheet.create({
   chipSel: { backgroundColor: colors.brand, borderColor: colors.brand },
   chipTxt: { color: colors.onSurface, fontWeight: '700', fontSize: 13 },
   chipTxtSel: { color: '#FFFFFF' },
+  cardGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 8 },
+  gridCard: { width: '47%', paddingVertical: 20, borderRadius: radius.lg, backgroundColor: colors.surfaceSecondary, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', ...shadow.card },
+  gridCardSel: { backgroundColor: colors.brand, borderColor: colors.brand },
+  gridCardTxt: { fontSize: 15, fontWeight: '700', color: colors.onSurface },
+  proteinHeading: { fontSize: 18, fontWeight: '800', color: colors.onSurface, marginTop: 24 },
+  proteinWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 4 },
+  proteinChip: { paddingHorizontal: 14, paddingVertical: 9, borderRadius: radius.pill, backgroundColor: colors.brandLight },
+  proteinChipTxt: { color: colors.brandDark, fontWeight: '700', fontSize: 13 },
   dietRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: colors.surfaceSecondary, padding: 14, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.border },
   dietLbl: { fontSize: 15, color: colors.onSurface, fontWeight: '600', textTransform: 'capitalize' },
   toggle: { width: 44, height: 24, borderRadius: 12, backgroundColor: colors.borderStrong, padding: 2 },
