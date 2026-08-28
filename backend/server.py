@@ -277,6 +277,126 @@ async def update_profile(payload: Dict[str, Any], user_id: str = Header(..., ali
 
 
 # ==================== FOOD SEARCH (Open Food Facts) ====================
+def _parse_size_grams(serving_size: Any, serving_quantity: Any, quantity: Any) -> float:
+    """Best-effort parse of a real serving size (in grams/ml) from OFF fields."""
+    if serving_quantity:
+        try:
+            v = float(str(serving_quantity).replace(",", "."))
+            if v > 0:
+                return v
+        except Exception:
+            pass
+    for raw in (serving_size, quantity):
+        if not raw:
+            continue
+        m = re.search(r"([\d]+(?:[.,]\d+)?)\s*(kg|kilo|ml|millilitre|milliliter|l|litre|liter|g|gram)\b", str(raw).lower())
+        if m:
+            try:
+                val = float(m.group(1).replace(",", "."))
+            except Exception:
+                continue
+            unit = m.group(2)
+            if unit.startswith("kg") or unit.startswith("kilo") or unit.startswith("l") or unit.startswith("litre") or unit.startswith("liter"):
+                val *= 1000
+            if val > 0:
+                return val
+    return 100.0
+
+
+def _serving_label(serving_size: Any, grams: float) -> str:
+    if serving_size and str(serving_size).strip():
+        return str(serving_size).strip()
+    return f"{int(round(grams))} g"
+
+
+async def _off_query(q: str, country: Optional[str], page_size: int = 40) -> List[Dict[str, Any]]:
+    params: Dict[str, Any] = {
+        "q": q,
+        "page_size": page_size,
+        "fields": "code,product_name,brands,serving_size,serving_quantity,nutriments,quantity,countries_tags,unique_scans_n,scans_n",
+    }
+    if country:
+        params["countries_tags"] = f"en:{country.lower()}"
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as hc:
+            r = await hc.get("https://search.openfoodfacts.org/search", params=params)
+            r.raise_for_status()
+            data = r.json()
+    except Exception as e:
+        logger.warning(f"OFF search failed (country={country}): {e}")
+        return []
+    return data.get("hits", []) or data.get("products", [])
+
+
+def _process_hits(hits: List[Dict[str, Any]], query_tokens: List[str], avoided: List[str]) -> tuple:
+    """Filter/score/normalize raw OFF hits into candidate result dicts. Returns (candidates, hidden_count)."""
+    candidates = []
+    hidden_count = 0
+    for hit in hits:
+        pn = hit.get("product_name") or ""
+        if isinstance(pn, list):
+            pn = next((x for x in pn if x), "")
+        if isinstance(pn, dict):
+            pn = pn.get("en") or next(iter(pn.values()), "")
+        name = str(pn or "").strip()
+        br = hit.get("brands") or ""
+        if isinstance(br, list):
+            br = ", ".join(str(x) for x in br if x)
+        brand = str(br or "").strip()
+        if not name:
+            continue
+
+        nutr = hit.get("nutriments") or {}
+        kcal_100 = nutr.get("energy-kcal_100g") or nutr.get("energy-kcal") or 0
+        if isinstance(kcal_100, str):
+            try:
+                kcal_100 = float(kcal_100)
+            except Exception:
+                kcal_100 = 0
+        kcal_100 = float(kcal_100 or 0)
+        if kcal_100 <= 0:
+            continue  # drop zero-calorie / missing-data entries
+
+        if avoided and food_matches_avoided(name, brand, avoided):
+            hidden_count += 1
+            continue
+
+        text = f"{name} {brand}".lower()
+        relevance = sum(1 for t in query_tokens if t and t in text)
+        if query_tokens and relevance == 0:
+            continue  # not actually relevant to the search terms
+
+        grams = _parse_size_grams(hit.get("serving_size"), hit.get("serving_quantity"), hit.get("quantity"))
+        label = _serving_label(hit.get("serving_size"), grams)
+        prot = float(nutr.get("proteins_100g") or 0)
+        carbs = float(nutr.get("carbohydrates_100g") or 0)
+        fat = float(nutr.get("fat_100g") or 0)
+        popularity = hit.get("unique_scans_n") or hit.get("scans_n") or 0
+        try:
+            popularity = int(popularity)
+        except Exception:
+            popularity = 0
+
+        candidates.append({
+            "code": hit.get("code"),
+            "name": name,
+            "brand": brand,
+            "serving_label": label,
+            "serving_grams": round(grams, 1),
+            "serving_kcal": round(kcal_100 * grams / 100),
+            "serving_protein": round(prot * grams / 100, 1),
+            "serving_carbs": round(carbs * grams / 100, 1),
+            "serving_fat": round(fat * grams / 100, 1),
+            "kcal_100g": round(kcal_100, 1),
+            "protein_100g": round(prot, 1),
+            "carbs_100g": round(carbs, 1),
+            "fat_100g": round(fat, 1),
+            "_relevance": relevance,
+            "_popularity": popularity,
+        })
+    return candidates, hidden_count
+
+
 @api_router.get("/foods/search")
 async def food_search(q: str, country: Optional[str] = None, x_user_id: Optional[str] = Header(None)):
     if not q or len(q) < 2:
@@ -288,65 +408,37 @@ async def food_search(q: str, country: Optional[str] = None, x_user_id: Optional
         if user:
             avoided = user.get("profile", {}).get("avoided_foods", []) or []
 
-    params: Dict[str, Any] = {"q": q, "page_size": 40, "fields": "code,product_name,brands,serving_size,serving_quantity,nutriments,quantity,countries_tags"}
-    if country:
-        params["countries_tags"] = f"en:{country.lower()}"
-    try:
-        async with httpx.AsyncClient(timeout=8.0) as hc:
-            r = await hc.get("https://search.openfoodfacts.org/search", params=params)
-            r.raise_for_status()
-            data = r.json()
-    except Exception as e:
-        logger.warning(f"OFF search failed: {e}")
-        return {"results": []}
+    query_tokens = [t for t in re.split(r"\s+", q.lower().strip()) if len(t) > 1]
+    bias_country = country or "united-states"
 
-    seen_keys = set()
+    hits = await _off_query(q, bias_country)
+    candidates, hidden_count = _process_hits(hits, query_tokens, avoided)
+
+    # Fallback to a global (non-country-biased) query if too few good matches
+    if len(candidates) < 8:
+        global_hits = await _off_query(q, None)
+        seen_codes = {c.get("code") for c in candidates if c.get("code")}
+        extra_hits = [h for h in global_hits if h.get("code") not in seen_codes]
+        extra_candidates, extra_hidden = _process_hits(extra_hits, query_tokens, avoided)
+        candidates.extend(extra_candidates)
+        hidden_count += extra_hidden
+
+    # De-duplicate near-identical products (same name + brand + serving size), keeping the most-scanned
+    best: Dict[str, Dict[str, Any]] = {}
+    for c in candidates:
+        key = f"{c['name'].lower()}|{c['brand'].lower()}|{round(c['serving_grams'])}"
+        existing = best.get(key)
+        if not existing or c["_popularity"] > existing["_popularity"]:
+            best[key] = c
+
+    ranked = sorted(best.values(), key=lambda c: (c["_relevance"], c["_popularity"]), reverse=True)
     results = []
-    hidden_count = 0
-    for hit in data.get("hits", []) or data.get("products", []):
-        pn = hit.get("product_name") or ""
-        if isinstance(pn, list):
-            pn = next((x for x in pn if x), "")
-        if isinstance(pn, dict):
-            pn = pn.get("en") or next(iter(pn.values()), "")
-        name = str(pn or "").strip()
-        br = hit.get("brands") or ""
-        if isinstance(br, list):
-            br = ", ".join(str(x) for x in br if x)
-        brand = str(br or "").strip()
-        nutr = hit.get("nutriments") or {}
-        # normalize kcal per 100g
-        kcal_100 = nutr.get("energy-kcal_100g") or nutr.get("energy-kcal") or 0
-        if isinstance(kcal_100, str):
-            try:
-                kcal_100 = float(kcal_100)
-            except Exception:
-                kcal_100 = 0
-        if not name or not kcal_100 or kcal_100 <= 0:
-            continue
-        key = f"{name.lower()}|{brand.lower()}"
-        if key in seen_keys:
-            continue
-        if avoided and food_matches_avoided(name, brand, avoided):
-            hidden_count += 1
-            continue
-        seen_keys.add(key)
-        prot = nutr.get("proteins_100g") or 0
-        carbs = nutr.get("carbohydrates_100g") or 0
-        fat = nutr.get("fat_100g") or 0
-        serving = hit.get("serving_size") or hit.get("quantity") or "100 g"
-        results.append({
-            "code": hit.get("code"),
-            "name": name,
-            "brand": brand,
-            "serving": serving,
-            "kcal_100g": round(float(kcal_100), 1),
-            "protein_100g": round(float(prot), 1),
-            "carbs_100g": round(float(carbs), 1),
-            "fat_100g": round(float(fat), 1),
-        })
-        if len(results) >= 20:
-            break
+    for c in ranked[:20]:
+        c = dict(c)
+        c.pop("_relevance", None)
+        c.pop("_popularity", None)
+        results.append(c)
+
     return {"results": results, "hidden_count": hidden_count}
 
 

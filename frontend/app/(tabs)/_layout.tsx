@@ -1,8 +1,8 @@
 import React from 'react';
 import { Tabs, useRouter } from 'expo-router';
-import { View, Pressable, StyleSheet, Platform } from 'react-native';
+import { Pressable, StyleSheet, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, radius, shadow } from '@/src/theme';
+import { colors, shadow } from '@/src/theme';
 
 function TabIcon({ name, color }: any) {
   return <Ionicons name={name} size={24} color={color} />;
@@ -46,15 +46,8 @@ export default function TabsLayout() {
         name="add"
         options={{
           title: '',
-          tabBarIcon: () => <CenterPlus />,
-          tabBarLabel: () => null,
+          tabBarButton: () => <CenterPlus />,
         }}
-        listeners={({ navigation }) => ({
-          tabPress: (e) => {
-            e.preventDefault();
-            navigation.navigate('home' as never);
-          },
-        })}
       />
       <Tabs.Screen name="buddy" options={{ title: 'Buddy', tabBarIcon: ({ color }) => <TabIcon name="chatbubble-ellipses" color={color} /> }} />
       <Tabs.Screen name="profile" options={{ title: 'Profile', tabBarIcon: ({ color }) => <TabIcon name="person" color={color} /> }} />

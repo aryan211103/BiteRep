@@ -8,7 +8,6 @@ import { apiFetch } from '@/src/api';
 import { todayStr } from '@/src/units';
 
 const MEASURES: { key: string; label: string; grams: number }[] = [
-  { key: 'serving', label: '1 serving', grams: 100 },
   { key: 'cup', label: '1 cup', grams: 240 },
   { key: 'bowl', label: '1 bowl', grams: 350 },
   { key: 'plate', label: '1 plate', grams: 450 },
@@ -24,22 +23,37 @@ export default function SearchScreen() {
   const [q, setQ] = useState('');
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState<any[]>([]);
+  const [hiddenCount, setHiddenCount] = useState(0);
   const [picked, setPicked] = useState<any | null>(null);
   const [meal, setMeal] = useState<MealKey>(initialMeal);
   const [grams, setGrams] = useState('100');
 
   useEffect(() => {
     const h = setTimeout(async () => {
-      if (q.trim().length < 2) { setResults([]); return; }
+      if (q.trim().length < 2) { setResults([]); setHiddenCount(0); return; }
       setLoading(true);
       try {
         const j = await apiFetch(`/foods/search?q=${encodeURIComponent(q.trim())}`);
         setResults(j.results || []);
-      } catch { setResults([]); }
+        setHiddenCount(j.hidden_count || 0);
+      } catch { setResults([]); setHiddenCount(0); }
       finally { setLoading(false); }
     }, 350);
     return () => clearTimeout(h);
   }, [q]);
+
+  const measures = useMemo(() => {
+    const base = [...MEASURES];
+    if (picked?.serving_grams && Math.round(picked.serving_grams) !== 100) {
+      base.unshift({ key: 'serving', label: `1 serving (${picked.serving_label})`, grams: Math.round(picked.serving_grams) });
+    }
+    return base;
+  }, [picked]);
+
+  const pick = (item: any) => {
+    setPicked(item);
+    setGrams(String(Math.round(item.serving_grams || 100)));
+  };
 
   const calc = useMemo(() => {
     if (!picked) return null;
@@ -101,6 +115,11 @@ export default function SearchScreen() {
         data={results}
         keyExtractor={(r) => r.code || r.name}
         contentContainerStyle={{ padding: spacing.lg, paddingBottom: 40 }}
+        ListHeaderComponent={
+          hiddenCount > 0 ? (
+            <Text style={styles.hiddenNote}>{hiddenCount} result{hiddenCount > 1 ? 's' : ''} hidden based on your diet preferences</Text>
+          ) : null
+        }
         ListEmptyComponent={
           <View style={{ padding: 20, alignItems: 'center' }}>
             {loading ? <ActivityIndicator color={colors.brand} /> : (
@@ -109,11 +128,11 @@ export default function SearchScreen() {
           </View>
         }
         renderItem={({ item }) => (
-          <Pressable style={styles.result} onPress={() => setPicked(item)} testID={`result-${item.code}`}>
+          <Pressable style={styles.result} onPress={() => pick(item)} testID={`result-${item.code}`}>
             <View style={{ flex: 1 }}>
               <Text style={styles.resultName} numberOfLines={1}>{item.name}</Text>
               <Text style={styles.resultSub} numberOfLines={1}>
-                {item.brand ? `${item.brand} · ` : ''}{item.serving} · {item.kcal_100g} kcal/100g
+                {item.brand ? `${item.brand} · ` : ''}{item.serving_label} · {item.serving_kcal} kcal
               </Text>
             </View>
             <Ionicons name="add-circle" size={26} color={colors.brand} />
@@ -126,7 +145,7 @@ export default function SearchScreen() {
           <View style={styles.sheet}>
             <View style={styles.handle} />
             <Text style={styles.sheetTitle} numberOfLines={1}>{picked?.name}</Text>
-            <Text style={styles.sheetSub}>{picked?.brand || ''} · {picked?.kcal_100g} kcal/100g</Text>
+            <Text style={styles.sheetSub}>{picked?.brand || ''} · {picked?.serving_label} · {picked?.serving_kcal} kcal</Text>
 
             <Text style={styles.lbl}>Meal</Text>
             <View style={{ flexDirection: 'row', gap: 8 }}>
@@ -139,7 +158,7 @@ export default function SearchScreen() {
 
             <Text style={styles.lbl}>Measure</Text>
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-              {MEASURES.map((m) => (
+              {measures.map((m) => (
                 <Pressable
                   key={m.key}
                   onPress={() => setGrams(String(m.grams))}
@@ -196,6 +215,7 @@ const styles = StyleSheet.create({
   result: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surfaceSecondary, padding: 12, borderRadius: radius.lg, marginBottom: 8, ...shadow.card },
   resultName: { fontSize: 15, color: colors.onSurface, fontWeight: '700' },
   resultSub: { fontSize: 12, color: colors.muted, marginTop: 2 },
+  hiddenNote: { fontSize: 12, color: colors.muted, fontWeight: '600', marginBottom: 8, textAlign: 'center' },
   sheetWrap: { flex: 1, justifyContent: 'flex-end', backgroundColor: '#00000055' },
   sheet: { backgroundColor: colors.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: spacing.lg },
   handle: { width: 40, height: 4, borderRadius: 2, backgroundColor: colors.borderStrong, alignSelf: 'center', marginBottom: 12 },

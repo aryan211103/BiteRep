@@ -65,7 +65,7 @@ const styles = StyleSheet.create({
   title: { fontSize: 17, fontWeight: '800', color: colors.onSurface },
   sub: { fontSize: 13, color: colors.muted, marginTop: 2, fontWeight: '600' },
   addBtn: {
-    width: 40, height: 40, borderRadius: 20,
+    width: 44, height: 44, borderRadius: 22,
     backgroundColor: colors.brandLight,
     alignItems: 'center', justifyContent: 'center',
   },
