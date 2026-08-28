@@ -1,0 +1,213 @@
+{
+  "app_name": "BiteRep",
+  "personality": "4 Tactile / Playful LIGHT",
+  "personality_one_liner": "A clean, modern, approachable fitness tracker with generous rounded corners, soft shadows, and a vibrant green accent for motivation.",
+  "color": {
+    "surface": "#F8F9FA",
+    "onSurface": "#111827",
+    "surfaceSecondary": "#FFFFFF",
+    "onSurfaceSecondary": "#1F2937",
+    "surfaceTertiary": "#F3F4F6",
+    "onSurfaceTertiary": "#374151",
+    "surfaceInverse": "#1F2937",
+    "onSurfaceInverse": "#FFFFFF",
+    "brand": "#16a34a",
+    "brandPrimary": "#16a34a",
+    "onBrandPrimary": "#FFFFFF",
+    "brandSecondary": "#22c55e",
+    "onBrandSecondary": "#FFFFFF",
+    "brandTertiary": "#dcfce7",
+    "onBrandTertiary": "#166534",
+    "success": "#22c55e",
+    "onSuccess": "#FFFFFF",
+    "warning": "#eab308",
+    "onWarning": "#111827",
+    "error": "#ef4444",
+    "onError": "#FFFFFF",
+    "info": "#4b5563",
+    "onInfo": "#FFFFFF",
+    "border": "#E5E7EB",
+    "borderStrong": "#D1D5DB",
+    "divider": "#F3F4F6"
+  },
+  "dark_color": {
+    "surface": "#111827",
+    "onSurface": "#F9FAFB",
+    "surfaceSecondary": "#1F2937",
+    "onSurfaceSecondary": "#F3F4F6",
+    "surfaceTertiary": "#374151",
+    "onSurfaceTertiary": "#E5E7EB",
+    "surfaceInverse": "#F9FAFB",
+    "onSurfaceInverse": "#111827",
+    "brand": "#16a34a",
+    "brandPrimary": "#22c55e",
+    "onBrandPrimary": "#052e16",
+    "brandSecondary": "#15803d",
+    "onBrandSecondary": "#FFFFFF",
+    "brandTertiary": "#064e3b",
+    "onBrandTertiary": "#a7f3d0",
+    "success": "#22c55e",
+    "onSuccess": "#052e16",
+    "warning": "#facc15",
+    "onWarning": "#422006",
+    "error": "#f87171",
+    "onError": "#450a0a",
+    "info": "#9ca3af",
+    "onInfo": "#111827",
+    "border": "#374151",
+    "borderStrong": "#4B5563",
+    "divider": "#1F2937"
+  },
+  "typography": {
+    "displayFontFamily": "Plus Jakarta Sans",
+    "textFontFamily": "Plus Jakarta Sans",
+    "scale": {
+      "sm": 12,
+      "base": 14,
+      "lg": 16,
+      "xl": 20,
+      "2xl": 24
+    }
+  },
+  "spacing": {
+    "rule": "Generous vertical breathing room. Cards never flush to screen edge, use md or lg margin. Content grouped intentionally.",
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+    "2xl": 32,
+    "3xl": 48
+  },
+  "radius_tokens": {
+    "sm": 6,
+    "md": 12,
+    "lg": 20,
+    "pill": 999
+  },
+  "shadow_tier": 2,
+  "navigation": "bottom_tabs",
+  "icon_set": "Phosphor",
+  "glassmorphism": {
+    "enabled": true,
+    "do's": [
+      "Bottom tab bar background",
+      "Sticky headers over scrolling content (like the date strip)",
+      "Floating Action Buttons (FAB) for AI scanner"
+    ],
+    "dont's": [
+      "Form fields",
+      "Body text regions",
+      "Every card in dense lists"
+    ]
+  },
+  "platform_libraries": {
+    "glass": {
+      "ios": "expo-glass-effect",
+      "android": "expo-blur",
+      "low_end_android_fallback": "solid surfaceSecondary"
+    },
+    "image": "expo-image",
+    "blur": "expo-blur",
+    "bottom_sheet": "@gorhom/bottom-sheet",
+    "animation": "react-native-reanimated",
+    "gesture": "react-native-gesture-handler"
+  },
+  "screens": [
+    {
+      "name": "Onboarding",
+      "purpose": "Collect user profile, body metrics, goals, and dietary preferences step-by-step.",
+      "states": {
+        "loading": "Spinner centered on screen",
+        "empty": "N/A",
+        "error": "Toast with retry option"
+      },
+      "layout": "Full-bleed step cards, large progress bar at top. Sticky primary CTA at the bottom inside KeyboardAvoidingView. Generous padding, bold typography for questions. Use pill toggles for diet selection."
+    },
+    {
+      "name": "Dashboard",
+      "purpose": "Primary view showing daily summary, calorie ring, macros, and logged meals.",
+      "states": {
+        "loading": "Skeleton loaders for cards and ring",
+        "empty": "Show empty calorie ring and 0/0 macros with a prompt to log first meal.",
+        "error": "Error message with a retry button to reload data."
+      },
+      "layout": "Glass sticky header containing a horizontal date strip. Below it, a hero section with a large Calorie remaining ring and three horizontal macro cards (Protein, Carbs, Fat). Below that, vertical list of Meals (Breakfast, Lunch, Snacks, Dinner) configured as large cards with their own mini progress bars. Bottom tab bar with a raised, branded center '+' button."
+    },
+    {
+      "name": "FoodSearch",
+      "purpose": "Search Open Food Facts and manage AI photo logging.",
+      "states": {
+        "loading": "Spinner below search bar while typing",
+        "empty": "Empty plate illustration if no recent foods or no search results",
+        "error": "Error state for failed API call"
+      },
+      "layout": "Sticky top search bar. List of recent/frequent foods. Floating Action Button (Glass + Green) in bottom right for AI photo logging, or prominently accessible from the search view."
+    },
+    {
+      "name": "WorkoutLogger",
+      "purpose": "Log exercises, sets, reps, and weights.",
+      "states": {
+        "loading": "Skeleton rows",
+        "empty": "Illustration of a workout bench, text 'No workouts logged today', primary CTA 'Add Exercise'",
+        "error": "Retry button"
+      },
+      "layout": "List of exercises. Each exercise is a card containing a tabular layout for Sets, Reps, and Weight, with pill-shaped check toggles to mark sets as complete."
+    },
+    {
+      "name": "Trends",
+      "purpose": "Visualize weight, calories, and adaptive TDEE over time.",
+      "states": {
+        "loading": "Skeleton chart",
+        "empty": "Illustration showing missing data, prompt to keep logging.",
+        "error": "Retry to fetch stats"
+      },
+      "layout": "Segmented pill toggles at top for timeframes (1W, 1M, 6M). Chart area below. Summary stat cards for averages in a 2-column grid."
+    },
+    {
+      "name": "AIBuddy",
+      "purpose": "Chat interface with the AI fitness coach.",
+      "states": {
+        "loading": "Typing indicator bubbles",
+        "empty": "Empty chat with suggested prompt chips",
+        "error": "Message failed to send, tap to retry"
+      },
+      "layout": "Standard chat layout. AI Mascot avatar on coach messages. Sticky text input at bottom (KeyboardAvoidingView) with a send button. Use brandTertiary for user message bubbles, surfaceSecondary for AI bubbles."
+    },
+    {
+      "name": "Profile",
+      "purpose": "Manage settings, units, and manual targets.",
+      "states": {
+        "loading": "Skeleton rows",
+        "empty": "N/A",
+        "error": "Failed to load profile"
+      },
+      "layout": "List of settings rows. Each row uses a tinted icon container (brandTertiary bg with brandPrimary icon). Toggles for metric/imperial units. Section for manual TDEE override."
+    }
+  ],
+  "images": {
+    "meal_placeholder": {
+      "url": "https://images.unsplash.com/photo-1623489254660-db5b367881d9?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2ODl8MHwxfHNlYXJjaHwyfHxoZWFsdGh5JTIwZ3JlZW4lMjBzYWxhZCUyMGJvd2x8ZW58MHx8fHwxNzg3ODc5MzM3fDA&ixlib=rb-4.1.0&q=85",
+      "alt": "healthy green salad bowl"
+    },
+    "empty_plate": {
+      "url": "https://images.unsplash.com/photo-1531928351158-2f736078e0a1?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1NzV8MHwxfHNlYXJjaHwxfHxlbXB0eSUyMHBsYXRlfGVufDB8fHx8MTc4Nzg3OTM0MXww&ixlib=rb-4.1.0&q=85",
+      "alt": "sad face empty plate on pink background"
+    },
+    "ai_mascot": {
+      "url": "https://images.unsplash.com/photo-1659018966820-de07c94e0d01?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1NTZ8MHwxfHNlYXJjaHwxfHxjdXRlJTIwZ3JlZW4lMjByb2JvdCUyMGNoYXJhY3RlcnxlbnwwfHx8fDE3ODc4NzkzNDZ8MA&ixlib=rb-4.1.0&q=85",
+      "alt": "cute green toy robot character"
+    }
+  },
+  "instructions_to_main_agent": [
+    "Strictly follow the Tactile / Playful LIGHT personality. Use Plus Jakarta Sans for a clean, modern aesthetic similar to Cal AI.",
+    "Implement soft shadows (Shadow Tier 2) on all major cards, with large corner radii (lg / 20px).",
+    "The primary accent is a vibrant green (#16a34a). Do not use any blue, purple, or orange hues in the UI. Ensure info / warnings are mapped to neutral or yellow/red.",
+    "The Dashboard requires a raised center '+' button on the bottom tab bar. Ensure this is prominently styled and easy to tap.",
+    "For the Meals list (Breakfast, Lunch, Snacks, Dinner), treat them as substantial cards with internal mini progress bars for their specific calorie targets.",
+    "Ensure dark mode mapping is correct. surfaceSecondary should be #1F2937, avoiding pure black.",
+    "Use glassmorphism (expo-glass-effect or expo-blur) on the sticky date strip header and the bottom tab bar.",
+    "Make sure pill segmented controls are used for diet toggles in onboarding and timeframes in the Trends view.",
+    "Do not use emojis anywhere in the system UI. Rely on Phosphor icons."
+  ]
+}
